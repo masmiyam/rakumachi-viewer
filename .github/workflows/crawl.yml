@@ -1,8 +1,10 @@
 name: Crawl Rakumachi Properties
 
+# NOTE: Scheduled run is disabled — rakumachi blocks GitHub Actions IPs (HTTP 403).
+# Crawling is delegated to a local launchd job on the maintainer's machine
+# (see scripts/run.sh + ~/Library/LaunchAgents/com.masmiyam.rakumachi-crawler.plist).
+# This workflow remains available for ad-hoc manual runs only.
 on:
-  schedule:
-    - cron: '0 18 * * *'
   workflow_dispatch:
 
 jobs:

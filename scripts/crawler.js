@@ -5,8 +5,8 @@ const path = require("path");
 const DAILY_DIR = path.join(__dirname, "../data/daily");
 const LATEST_PATH = path.join(__dirname, "../data/latest.json");
 const BASE_URL = process.env.BASE_URL || "https://www.rakumachi.jp/syuuekibukken/area/prefecture/dimAll/";
-const MAX_PAGES = parseInt(process.env.MAX_PAGES || "200", 10);
-const DELAY_MS = parseInt(process.env.DELAY_MS || "1500", 10);
+const MAX_PAGES = parseInt(process.env.MAX_PAGES || "50", 10);
+const DELAY_MS = parseInt(process.env.DELAY_MS || "8000", 10);
 
 const PREFECTURES = [
   "北海道","青森県","岩手県","宮城県","秋田県","山形県","福島県",
@@ -226,8 +226,8 @@ async function extractBlocks(page) {
   });
 }
 
-const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || "4", 10);
-const RETRY_BASE_MS = parseInt(process.env.RETRY_BASE_MS || "8000", 10);
+const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || "1", 10);
+const RETRY_BASE_MS = parseInt(process.env.RETRY_BASE_MS || "20000", 10);
 
 async function gotoWithRetry(page, url, referer) {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -303,11 +303,8 @@ async function main() {
       const result = await gotoWithRetry(page, url, prevUrl);
       if (!result.ok) {
         if (result.status === 403 || result.status === 429) {
-          blocked403++;
-          if (blocked403 >= 3) {
-            console.error(`  ${blocked403} consecutive blocks, aborting crawl`);
-            break;
-          }
+          console.error(`  Blocked (HTTP ${result.status}), aborting to avoid IP reputation damage`);
+          break;
         }
         continue;
       }
