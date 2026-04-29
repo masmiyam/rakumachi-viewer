@@ -226,34 +226,94 @@ async function extractBlocks(page) {
   });
 }
 
+const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || "4", 10);
+const RETRY_BASE_MS = parseInt(process.env.RETRY_BASE_MS || "8000", 10);
+
+async function gotoWithRetry(page, url, referer) {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: 45000,
+        referer: referer || undefined,
+      });
+      const status = resp ? resp.status() : 0;
+      if (status === 403 || status === 429) {
+        if (attempt === MAX_RETRIES) {
+          console.error(`  HTTP ${status} after ${MAX_RETRIES + 1} attempts, giving up on this page`);
+          return { ok: false, status };
+        }
+        const wait = RETRY_BASE_MS * Math.pow(2, attempt) + Math.floor(Math.random() * 3000);
+        console.error(`  HTTP ${status} (attempt ${attempt + 1}/${MAX_RETRIES + 1}), backoff ${wait}ms`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      return { ok: true, status };
+    } catch (e) {
+      if (attempt === MAX_RETRIES) {
+        console.error(`  navigation failed after retries: ${e.message}`);
+        return { ok: false, status: 0, error: e.message };
+      }
+      const wait = RETRY_BASE_MS * Math.pow(2, attempt);
+      console.error(`  navigation error (attempt ${attempt + 1}/${MAX_RETRIES + 1}): ${e.message}, backoff ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  return { ok: false, status: 0 };
+}
+
 async function main() {
-  console.log(`[${new Date().toISOString()}] Crawler started (MAX_PAGES=${MAX_PAGES})`);
+  console.log(`[${new Date().toISOString()}] Crawler started (MAX_PAGES=${MAX_PAGES}, DELAY_MS=${DELAY_MS})`);
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     locale: "ja-JP",
+    timezoneId: "Asia/Tokyo",
     viewport: { width: 1366, height: 900 },
+    extraHTTPHeaders: {
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+      "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+      "Sec-Ch-Ua-Mobile": "?0",
+      "Sec-Ch-Ua-Platform": '"macOS"',
+      "Upgrade-Insecure-Requests": "1",
+    },
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    Object.defineProperty(navigator, "languages", { get: () => ["ja", "en-US", "en"] });
+    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
   });
   const page = await context.newPage();
   const all = [];
   const seen = new Set();
 
+  console.log(`Warming up: visiting top page`);
+  await gotoWithRetry(page, "https://www.rakumachi.jp/", null);
+  await page.waitForTimeout(2500);
+
+  let prevUrl = "https://www.rakumachi.jp/";
+  let blocked403 = 0;
+
   try {
     for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
       const url = buildPageUrl(BASE_URL, pageNum);
       console.log(`Fetching page ${pageNum}: ${url}`);
-      try {
-        const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-        if (resp && (resp.status() === 403 || resp.status() === 429)) {
-          console.error(`  HTTP ${resp.status()}, aborting`);
-          break;
+      const result = await gotoWithRetry(page, url, prevUrl);
+      if (!result.ok) {
+        if (result.status === 403 || result.status === 429) {
+          blocked403++;
+          if (blocked403 >= 3) {
+            console.error(`  ${blocked403} consecutive blocks, aborting crawl`);
+            break;
+          }
         }
-      } catch (e) {
-        console.error(`  navigation failed: ${e.message}`);
         continue;
       }
-      await page.waitForTimeout(2000);
+      blocked403 = 0;
+      prevUrl = url;
+      await page.waitForTimeout(2000 + Math.floor(Math.random() * 1500));
 
       const items = await extractBlocks(page);
       const fresh = items.filter((p) => p.id && !seen.has(p.id));
@@ -261,7 +321,10 @@ async function main() {
       console.log(`  Found ${items.length} (new: ${fresh.length})`);
       if (items.length === 0 || fresh.length === 0) break;
       all.push(...fresh.map(postProcess));
-      if (pageNum < MAX_PAGES) await new Promise((r) => setTimeout(r, DELAY_MS));
+      if (pageNum < MAX_PAGES) {
+        const jitter = Math.floor(Math.random() * 2000);
+        await new Promise((r) => setTimeout(r, DELAY_MS + jitter));
+      }
     }
   } catch (err) {
     console.error("Crawl error:", err.message);

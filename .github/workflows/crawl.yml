@@ -34,7 +34,9 @@ jobs:
       - name: Run crawler
         env:
           MAX_PAGES: '200'
-          DELAY_MS: '1500'
+          DELAY_MS: '6000'
+          MAX_RETRIES: '4'
+          RETRY_BASE_MS: '10000'
         run: |
           cd scripts
           node crawler.js
